@@ -1,0 +1,295 @@
+---
+title: "Proyecto Final"
+output: html_notebook
+---
+
+```{r}
+# cargar librerias
+
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(tidyverse)
+library(corrplot)
+library(caret)
+library(mice)
+library(kernlab)
+library(randomForest)
+
+```
+
+```{r}
+# cargar dataset de archivo de entrenamiento
+
+dataset <- read.csv("train.csv")
+
+```
+
+```{r}
+# revisamos el tamaño del dataset
+
+nrow(dataset)
+
+```
+
+```{r}
+# revisamos cantidad de NAs por columna
+
+colSums(is.na(dataset))
+```
+
+```{r}
+# de lo anterior vemos que menos del 1% es NA, por lo tanto para esta parte los eliminaremos
+
+dataset <- drop_na(dataset)
+
+```
+
+```{r}
+# convertir la variable categorica a numerica 
+
+dataset$ocean_proximity <- factor(dataset$ocean_proximity)
+
+dataset$ocean_proximity <- as.numeric(dataset$ocean_proximity)
+
+```
+
+```{r}
+# Realizar grafica de correlacion entre las variables
+
+corrplot(cor(dataset),
+            method="number",
+            type="upper")
+
+```
+
+```{r}
+cor(dataset)
+```
+
+```{r}
+# se asignan las variables independientes y dependiente, por la grafica de arriba se dejara fuera
+# las variables de latitud, longitud y id
+
+x <- dataset %>%
+  select(id, longitude, latitude, housing_median_age, total_rooms, total_bedrooms, population, median_income, households, ocean_proximity)
+
+y <- dataset$median_house_value
+
+# se hace un escalamiento de las variables independientes para un mejor uso de los metodos a usar
+
+preprocessParams <- preProcess(x, method = c("center", "scale"))
+x <- predict(preprocessParams, x)
+
+```
+
+```{r}
+# se dividen los datos en test y entrenamiento
+
+index <- createDataPartition(y, p=0.85, list=FALSE)
+
+x_train <- x[index, ]
+x_test <- x[-index, ]
+y_train <- y[index]
+y_test <- y[-index]
+
+```
+
+```{r}
+# se setean los valores de K para realizar un cross validation para mejores resultados
+
+kfolds_driver<-trainControl(
+  method="repeatedcv",
+  number = 10,
+  repeats = 10
+  )
+
+```
+
+```{r}
+# se estaran usando tres modelos simultaneamente para evaluar cual podria tener mejor rendimiento
+
+# se setean los valores de lambda
+
+lambda_values <- c(seq(0.1, 1.9, by =0.1),  seq(2, 5, 0.5), seq(6, 25, 1), seq(26, 50, 2))
+
+alpha_values <- seq(0, 1, 0.1)
+
+# se crea y entrena con el modelo de lasso 
+
+lasso <- train(y = y_train,
+                 x = x_train,
+                 trControl = kfolds_driver,
+                 method = 'glmnet', 
+                 tuneGrid = expand.grid(alpha = 1, lambda = lambda_values) ,
+                 metric =  "RMSE"
+               ) 
+
+# se crea y entrena con el modelo de ridge 
+
+ridge <- train(y = y_train,
+                 x = x_train,
+                 trControl = kfolds_driver,
+                 method = 'glmnet', 
+                 tuneGrid = expand.grid(alpha = 0, lambda = lambda_values),
+                 metric =  "RMSE"
+               ) 
+
+# se crea y entrena con el modelo linear
+
+linear <- train(y = y_train, 
+              x = x_train, 
+              trControl = kfolds_driver,
+              method = 'lm',
+              metric =  "RMSE"
+              )
+
+# se crea y entrena con el modelo de elastic net 
+
+elastic_net <- train(y = y_train,
+                 x = x_train,
+                 trControl = kfolds_driver,
+                 method = 'glmnet', 
+                 tuneGrid = expand.grid(alpha = alpha_values, lambda = lambda_values) ,
+                 metric =  "RMSE"
+               ) 
+```
+
+```{r}
+# se crea y entrena con el modelo de support vector regression 
+
+svr <-train(y = y_train,
+                 x = x_train,
+                 trControl = kfolds_driver,
+                 method = 'svmRadial', 
+                 metric =  "RMSE",
+                 tuneLength = 5
+               ) 
+
+```
+
+
+```{r}
+# se crea y entrena con el modelo de support vector regression 
+
+rfr <-train(y = y_train,
+                 x = x_train,
+                 method = 'rf', 
+                 metric =  "RMSE",
+                 tuneLength = 5
+               ) 
+
+```
+
+```{r}
+# realizamos las predicciones de cada modelo
+
+predictions_lasso <- lasso %>% predict(x_test)
+predictions_ridge <- ridge %>% predict(x_test)
+predictions_lin <- linear %>% predict(x_test)
+predictions_net <- elastic_net %>% predict(x_test)
+predictions_svr <- svr %>% predict(x_test)
+
+```
+
+```{r}
+# observamos los resultados de RMSE de cada modelo
+
+data.frame(
+  Ridge_RMSE = RMSE(predictions_ridge, y_test),
+  Lasso_RMSE = RMSE(predictions_lasso, y_test), 
+  Linear_RMSE = RMSE(predictions_lin, y_test),
+  net_RMSE = RMSE(predictions_net, y_test),
+  svr_RMSE = RMSE(predictions_svr, y_test)
+)
+
+```
+
+```{r}
+# observamos los resultados de R2 de cada modelo
+
+data.frame(
+  Ridge_R2 = R2(predictions_ridge, y_test),
+  Lasso_R2 = R2(predictions_lasso, y_test),
+  Linear_R2 = R2(predictions_lin, y_test),
+  net_R2 = R2(predictions_net, y_test),
+  svr_R2 = R2(predictions_svr, y_test)
+)
+
+```
+
+```{r}
+# Se cargara ahora la data del archivo de test
+```
+
+```{r}
+# cargar dataset
+
+dataset_test <- read.csv("test.csv")
+
+```
+
+```{r}
+# realizaremos imputaciones para reemplazar los valores NA's
+
+imputation_model <- mice(dataset_test, method = "pmm")
+
+imputed_data <- complete(imputation_model, action = "long")
+
+```
+
+```{r}
+# Asignamos nuevamente el nombre del dataframe original
+
+dataset_test <- filter(imputed_data, imputed_data$.imp == 2)
+```
+
+```{r}
+# convertir la variable categorica a numerica 
+
+dataset_test$ocean_proximity <- factor(dataset_test$ocean_proximity)
+
+dataset_test$ocean_proximity <- as.numeric(dataset_test$ocean_proximity)
+
+```
+
+```{r}
+# se asignan las variables independientes de este ultimo dataset
+
+X <- dataset_test %>%
+  select(id, longitude, latitude, housing_median_age, total_rooms, total_bedrooms, population, median_income, households, ocean_proximity)
+
+# se hace un escalamiento de las variables independientes para un mejor uso de los metodos a usar
+# se usara X en vez de x para diferenciar del anterior
+
+preprocessParams <- preProcess(X, method = c("center", "scale"))
+X <- predict(preprocessParams, X)
+
+```
+
+```{r}
+# realizar predicciones sobre la data de prueba
+
+predictions_lasso_test <- lasso %>% predict(X)
+predictions_ridge_test <- ridge %>% predict(X)
+predictions_linear_test <- linear %>% predict(X)
+predictions_net_test <- elastic_net %>% predict(X)
+predictions_svr_test <- svr %>% predict(X)
+
+```
+
+```{r}
+# guardamos el dataset para cargar a kaggle posteriormente
+
+write.csv(predictions_svr_test, file = "G:/Mi unidad/ESTUDIOS/Postgrado/Trimestre 2/Econometrìa en R/proyecto_1/prediction_39_svr.csv", row.names = FALSE)
+```
+
+```{r}
+# se usa de referencia ejemplos de estas paginas
+
+# https://www.datacareer.ch/blog/ridge-and-lasso-in-r/
+
+# https://www.pluralsight.com/guides/linear-lasso-and-ridge-regression-with-r
+
+```
+
